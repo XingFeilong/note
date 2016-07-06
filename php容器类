@@ -1,0 +1,254 @@
+<?php
+
+/**
+ * 容器类
+ * @author xfl
+ * @email 626347750@qq.com
+ * Class Container
+ */
+class Container
+{
+
+    protected $binds = array();     //抽象和匿名函数的映射
+
+    protected $instances = array(); //抽象和实例的映射
+
+    private $_depend = array();     //存储的依赖
+
+    /**
+     * 绑定别名
+     * @param $abstract 抽象
+     * @param $concrete 具体
+     * @return mixed
+     * @throws
+     */
+
+    public function bind($abstract, $concrete)
+    {
+        if ($concrete instanceof Closure) {
+            unset($this->instances[$abstract]);
+            return $this->binds[$abstract] = $concrete;
+        }
+        if (is_object($concrete)) {
+            return $this->instances[$abstract] = $concrete;
+        }
+        if (is_string($concrete)) {
+            unset($this->instances[$abstract]);
+            return $this->instances[$abstract] = null;
+        }
+        throw new RuntimeException('不允许为[数组类型]');
+    }
+
+    /**
+     * 制造实例
+     * @param $abstract 抽象
+     * @return mixed
+     * @throws Exception
+     */
+    public function make($abstract)
+    {
+        /**-----------------------------------
+         *  1如果这个类正好在依赖中 返回这个依赖实例
+         * ------------------------------------
+         */
+        if (array_key_exists($abstract, $this->_depend)) {
+            return $this->_depend[$abstract];
+        }
+
+        /**---------------------------------------
+         *  2假如$abstract被实例化过,则直接返回实例
+         * ---------------------------------------
+         */
+        if (array_key_exists($abstract, $this->instances) and is_object($this->instances[$abstract])) {
+            return $this->instances[$abstract];
+        }
+
+        /**-------------------------------------------
+         * 3如果$abstract被绑定过,尝试解析这个类,并返回实例
+         * -------------------------------------------
+         */
+        if ($this->instances[$abstract] === null) {
+            return $this->instances[$abstract] = $this->buildClass($abstract);
+        }
+
+        /**---------------------------------------------------------
+         * 4如果$abstract是匿名函数,则将容器注入到匿名函数中作为参数从执行
+         * ----------------------------------------------------------
+         */
+        if (isset($this->binds[$abstract])) {
+            return $this->instances[$abstract] = call_user_func_array($this->binds[$abstract], [$this]);
+        }
+
+        return null;
+    }
+
+
+
+    /**
+     * 添加到类依赖中
+     * @param $instances
+     * @return mixed
+     */
+    protected function appendDepend($instances = array())
+    {
+        foreach ($instances as $append) {
+            if (is_object($append)) {
+                $this->_depend[get_class($append)] = $append;
+            }
+        }
+    }
+
+
+    /**
+     * 创建类并在自动生成类的依赖
+     * @param  $abstract
+     * @return Class
+     * @throws Exception
+     */
+    protected function buildClass($abstract)
+    {
+        if ($abstract instanceof Closure) {
+            return $abstract($this);
+        }
+
+        //将这个类反射化
+        $reflector = new ReflectionClass($abstract);
+
+
+        if (!$reflector->isInstantiable()) {
+            throw new Exception("{$abstract}无法被实例化");
+        }
+
+        $constructor = $reflector->getConstructor();
+        if ($constructor === null) {
+            //获取构造函数,直接return
+            return new $abstract;
+        }
+
+
+        /**
+         * 构造函数的参数
+         */
+        $parameters = $constructor->getParameters();
+
+
+        //递归解析注入的类
+        $args = $this->getDependencies($parameters);
+
+
+        $this->appendDepend($args);
+
+        // 创建一个新的实例,将依赖注入到构造函数中
+        return $reflector->newInstanceArgs($args);
+    }
+
+    /**
+     *  递归解析注入到构造函数的类
+     * @param array $parameters
+     * @return array
+     * @throws Exception
+     */
+    private function getDependencies($parameters)
+    {
+        $dependencies = [];
+        foreach ($parameters as $parameter) {
+
+            $dependency = $parameter->getClass();
+
+            //如果是参数类型是Object,则继续解析依赖
+            if ($dependency instanceof ReflectionClass) {
+                $dependencies[] = $this->getDepend($dependency->name) ?: $this->buildClass($dependency->name);
+            } else {
+                //如果是其他参数,则尝试获取默认参数
+                $dependencies[] = $this->resolveNonClass($parameter);
+            }
+        }
+
+        return $dependencies;
+    }
+
+    /**
+     * 获取类的依赖
+     * @param $name
+     * @return mixed
+     */
+    private function getDepend($name)
+    {
+        return isset($this->_depend[$name])
+            ? $this->_depend[$name]
+            : false;
+    }
+
+    /**
+     * 解析参数的默认值
+     * @param ReflectionParameter $parameter
+     * @return mixed
+     * @throws Exception
+     */
+    private function resolveNonClass($parameter)
+    {
+        if ($parameter->isDefaultValueAvailable()) {
+            return $parameter->getDefaultValue();
+        }
+        throw new Exception('参数' . $parameter->name . '缺少默认值');
+    }
+
+
+}
+
+class Finger
+{
+    function __construct()
+    {
+        echo (__CLASS__) . '<br>';
+    }
+}
+
+class Head
+{
+    function __construct(Finger $finger)
+    {
+        echo (__CLASS__) . '<br>';
+    }
+}
+
+
+class People
+{
+
+    function __construct(head $head, Finger $finger, $id = 1)
+    {
+        echo (__CLASS__) . '<br>';
+    }
+
+}
+
+
+//实例化容器
+$container = new Container();
+
+//将Peple类绑定到people
+$container->bind('people', People::class);
+
+
+//制造people
+$people = $container->make('people');
+$people = $container->make('people');
+$people = $container->make('people');
+$people = $container->make('people');
+$people = $container->make('people');
+$people = $container->make('Finger');
+$people = $container->make('Head');
+$people = $container->make('people');
+
+
+
+function dd()
+{
+    array_map(function ($arg) {
+        echo '<pre>';
+        var_dump($arg);
+        echo '</pre>';
+    }, func_get_args());
+    die();
+}
